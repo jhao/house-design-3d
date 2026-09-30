@@ -1,0 +1,5 @@
+# 房型设计平台后端依赖（自用小工具，极简）
+fastapi
+uvicorn[standard]
+python-multipart
+httpx

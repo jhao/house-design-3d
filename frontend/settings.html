@@ -1,0 +1,157 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>系统设置 · 房型设计平台</title>
+  <link rel="stylesheet" href="/static/css/styles.css" />
+  <link rel="stylesheet" href="/static/css/settings.css" />
+</head>
+<body>
+<div class="sp">
+  <header class="sp-head">
+    <div class="sp-brand">
+      <span class="sp-logo">🏠</span>
+      <span class="sp-title">房型设计</span>
+      <span class="sp-sep">/</span>
+      <span class="sp-sub">系统设置</span>
+    </div>
+    <a class="sp-back" href="/">← 返回设计台</a>
+  </header>
+
+  <main class="sp-body">
+
+    <!-- 大模型（多模态）配置 -->
+    <section class="sp-card">
+      <h2>🤖 多模态大模型（图纸识别）</h2>
+      <p class="sp-desc">
+        用于「导入图纸」时识别 JPG / PNG / PDF / DWG 房型图，并把结果转成可编辑的房型数据。
+        接口采用 <b>OpenAI 兼容的 /chat/completions 视觉协议</b>，因此 OpenAI、通义千问 VL、智谱 GLM-4V、豆包、本地 Ollama(LLaVA) 等均可直接填写。
+      </p>
+
+      <div class="sp-grid">
+        <label class="sp-field sp-span2">
+          <span>接口地址 Base URL</span>
+          <input type="text" id="llmBase" placeholder="https://api.openai.com/v1" />
+          <em>以 /v1 结尾，程序会自动拼接 /chat/completions</em>
+        </label>
+        <label class="sp-field sp-span2">
+          <span>API Key</span>
+          <input type="password" id="llmKey" placeholder="sk-..." />
+          <em>仅保存在本机数据库，不会上传到任何第三方</em>
+        </label>
+        <label class="sp-field">
+          <span>文本 / 对话模型</span>
+          <input type="text" id="llmModel" placeholder="gpt-4o-mini" />
+          <em>AI 布置助手使用</em>
+        </label>
+        <label class="sp-field">
+          <span>多模态（视觉）模型</span>
+          <input type="text" id="llmVision" placeholder="留空则与上面相同" />
+          <em>图纸识别使用，如 gpt-4o / qwen-vl-max</em>
+        </label>
+        <label class="sp-field sp-span2">
+          <span>DWG 转换命令（可选）</span>
+          <input type="text" id="llmDwg" placeholder="例如：dwg2dxf {in} {out}.dxf" />
+          <em>DWG 为二进制专有格式，需先转成图片；{in} 为输入文件、{out} 为输出图片路径。
+              未配置时请直接上传 JPG / PNG。</em>
+        </label>
+        <label class="sp-field">
+          <span>超时（秒）</span>
+          <input type="number" id="llmTimeout" step="10" min="30" max="900" />
+        </label>
+        <label class="sp-field">
+          <span>最大输出 tokens</span>
+          <input type="number" id="llmMaxTokens" step="1000" min="2048" max="64000" />
+          <em>推理型模型（如 deepseek-flash）会先「思考」再作答，思考 token 也算在内。
+              预算不足会导致只思考、不返回内容 → 若导入报「内容为空」，请调大（建议 16000 以上）。</em>
+        </label>
+        <label class="sp-field sp-check">
+          <span><input type="checkbox" id="llmEnabled" /> 启用大模型</span>
+          <em>关闭后，图纸导入与 AI 布置将回退到内置规则</em>
+        </label>
+      </div>
+
+      <div class="sp-field sp-span2 sp-prompt">
+        <span>图纸识别提示词（可选覆盖）</span>
+        <textarea id="recogPrompt" rows="7" placeholder="留空则使用内置提示词：要求模型按 mm 坐标系输出 walls/rooms/openings/furniture 的 JSON"></textarea>
+        <em>导入 JPG / PNG / PDF / DWG 时，这段文字会与图片一起发给多模态大模型。留空即用内置提示词；
+            你可以写更贴合自己图纸的指令，例如「这是某楼盘户型图，门宽统一按 1000mm 估算」。保存后立即生效。</em>
+      </div>
+
+      <div class="sp-actions">
+        <button id="btnTestLlm">🔌 测试连接</button>
+        <button id="btnSaveLlm" class="primary">💾 保存配置</button>
+        <span class="sp-msg" id="llmMsg"></span>
+      </div>
+    </section>
+
+    <!-- 大模型调用日志 -->
+    <section class="sp-card">
+      <h2>📜 大模型调用日志</h2>
+      <p class="sp-desc">
+        每一次「图纸识别」「测试连接」调用大模型的记录都会在这里留存（含模型、状态、耗时、错误与模型回复摘要），
+        便于排查识别失败的原因。最近 500 条，最新的在最上面。
+      </p>
+      <div class="sp-actions">
+        <button id="btnRefreshLogs">🔄 刷新</button>
+        <button id="btnClearLogs">🗑️ 清空</button>
+        <span class="sp-msg" id="logMsg"></span>
+      </div>
+      <div class="sp-table-wrap">
+        <table class="sp-table" id="logTable">
+          <thead>
+            <tr>
+              <th class="num">时间</th><th>类型</th><th>模型</th>
+              <th>状态</th><th class="num">耗时</th><th>错误 / 回复摘要</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- 数据库存储 -->
+    <section class="sp-card">
+      <h2>🗄️ 数据库存储</h2>
+      <p class="sp-desc">当前 SQLite 数据库与上传目录的使用情况。</p>
+      <div class="sp-stats" id="dbStats"></div>
+
+      <h3 class="sp-h3">数据表</h3>
+      <div class="sp-table-wrap"><table class="sp-table" id="dbTables"></table></div>
+
+      <h3 class="sp-h3">项目（按最近更新）</h3>
+      <div class="sp-table-wrap"><table class="sp-table" id="dbProjects"></table></div>
+    </section>
+
+    <!-- 家具默认值 -->
+    <section class="sp-card">
+      <h2>🪑 家具默认值</h2>
+      <p class="sp-desc">
+        新增家具时的默认尺寸（单位 mm）。修改保存后，对新添加的家具立即生效；
+        已放置的家具不受影响，可在属性面板单独调整。
+      </p>
+      <div class="sp-table-wrap">
+        <table class="sp-table sp-editable" id="furnTable"></table>
+      </div>
+      <div class="sp-actions">
+        <button id="btnResetFurn">↩️ 恢复出厂默认</button>
+        <button id="btnSaveFurn" class="primary">💾 保存</button>
+        <span class="sp-msg" id="furnMsg"></span>
+      </div>
+    </section>
+
+    <!-- 墙体默认值（只读） -->
+    <section class="sp-card">
+      <h2>🧱 墙体默认厚度</h2>
+      <p class="sp-desc">各类墙体的默认厚度与层高默认值（项目基础配置）。</p>
+      <div class="sp-stats" id="wallStats"></div>
+    </section>
+
+  </main>
+</div>
+
+<div class="toast hidden" id="toast"></div>
+<script src="/static/js/settings.js"></script>
+</body>
+</html>

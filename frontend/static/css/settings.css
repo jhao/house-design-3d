@@ -1,0 +1,176 @@
+/* 系统设置页样式（复用 styles.css 的变量与基调） */
+
+/* 覆盖主页面的 overflow:hidden，设置页需要滚动 */
+html, body {
+  height: auto;
+  min-height: 100%;
+  overflow: auto;
+}
+
+.sp {
+  min-height: 100%;
+  background: var(--bg);
+  padding: 0 0 60px;
+}
+
+/* ---------- 头部 ---------- */
+.sp-head {
+  position: sticky; top: 0; z-index: 20;
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 14px 28px;
+  background: rgba(255, 255, 255, 0.95);
+  border-bottom: 1px solid var(--line);
+  backdrop-filter: blur(6px);
+}
+.sp-brand { display: flex; align-items: center; gap: 8px; font-size: 15px; }
+.sp-logo { font-size: 18px; }
+.sp-title { font-weight: 700; color: var(--ink); }
+.sp-sep { color: var(--line-strong); }
+.sp-sub { color: var(--muted); }
+.sp-back {
+  font-size: 13px; color: var(--ink); text-decoration: none;
+  padding: 6px 12px; border: 1px solid var(--line); border-radius: 9px;
+  background: #fff;
+}
+.sp-back:hover { border-color: var(--accent); color: var(--accent); }
+
+/* ---------- 主体 ---------- */
+.sp-body {
+  max-width: 980px;
+  margin: 0 auto;
+  padding: 22px 20px 0;
+  display: flex; flex-direction: column; gap: 18px;
+}
+
+.sp-card {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--r);
+  box-shadow: var(--card-shadow);
+  padding: 20px 22px;
+}
+.sp-card h2 {
+  margin: 0 0 6px; font-size: 16px; font-weight: 700; color: var(--ink);
+}
+.sp-card h3.sp-h3 {
+  margin: 20px 0 8px; font-size: 13px; font-weight: 600; color: var(--muted);
+}
+.sp-desc {
+  margin: 0 0 16px; font-size: 12.5px; line-height: 1.7; color: var(--muted);
+}
+.sp-desc b { color: var(--ink); }
+
+/* ---------- 表单 ---------- */
+.sp-grid {
+  display: grid; grid-template-columns: 1fr 1fr; gap: 14px 18px;
+}
+.sp-field { display: flex; flex-direction: column; gap: 5px; }
+.sp-field > span { font-size: 12.5px; font-weight: 600; color: var(--ink); }
+.sp-field > em { font-style: normal; font-size: 11.5px; color: var(--muted); line-height: 1.6; }
+.sp-field input[type="text"],
+.sp-field input[type="password"],
+.sp-field input[type="number"] {
+  padding: 9px 11px; font-size: 13px; font-family: inherit;
+  border: 1px solid var(--line-strong); border-radius: 9px;
+  background: #fffdf9; color: var(--ink);
+}
+.sp-field input:focus { outline: 2px solid rgba(255, 138, 91, 0.35); border-color: var(--accent); }
+.sp-span2 { grid-column: span 2; }
+.sp-check > span { display: flex; align-items: center; gap: 8px; }
+.sp-check input[type="checkbox"] { width: 15px; height: 15px; accent-color: var(--accent); }
+
+@media (max-width: 720px) {
+  .sp-grid { grid-template-columns: 1fr; }
+  .sp-span2 { grid-column: span 1; }
+}
+
+/* ---------- 按钮 ---------- */
+.sp-actions {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  margin-top: 18px; padding-top: 14px; border-top: 1px dashed var(--line);
+}
+.sp-actions button {
+  padding: 8px 16px; font-size: 13px; font-family: inherit; cursor: pointer;
+  border: 1px solid var(--line-strong); border-radius: 9px;
+  background: #fff; color: var(--ink);
+}
+.sp-actions button:hover { background: #f4f1ea; }
+.sp-actions button.primary {
+  background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600;
+}
+.sp-actions button.primary:hover { filter: brightness(0.96); }
+
+.sp-msg { font-size: 12.5px; color: var(--muted); }
+.sp-msg.ok { color: #2f8f5b; }
+.sp-msg.err { color: #c0392b; }
+
+/* ---------- 统计卡 ---------- */
+.sp-stats {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 12px;
+}
+.sp-stat {
+  padding: 12px 14px; border: 1px solid var(--line); border-radius: 11px;
+  background: #fffdf9;
+}
+.sp-stat.sp-wide { grid-column: 1 / -1; }
+.sp-stat-v { font-size: 18px; font-weight: 700; color: var(--ink); }
+.sp-stat-l { margin-top: 2px; font-size: 12px; color: var(--muted); }
+.sp-stat-s { margin-top: 3px; font-size: 11.5px; color: #a49c90; word-break: break-all; }
+.mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
+
+/* ---------- 表格 ---------- */
+.sp-table-wrap { overflow-x: auto; }
+.sp-table {
+  width: 100%; border-collapse: collapse; font-size: 12.5px;
+}
+.sp-table th, .sp-table td {
+  padding: 8px 10px; text-align: left;
+  border-bottom: 1px solid var(--line);
+}
+.sp-table th { font-weight: 600; color: var(--muted); background: #faf8f4; }
+.sp-table td.num, .sp-table th.num { text-align: right; }
+.sp-table tbody tr:hover { background: #faf8f4; }
+.dim { color: var(--muted); }
+
+.sp-table.sp-editable input {
+  padding: 5px 7px; font-size: 12.5px; font-family: inherit; width: 100%;
+  border: 1px solid var(--line); border-radius: 6px; background: #fff;
+}
+.sp-table.sp-editable input:focus { outline: 2px solid rgba(255, 138, 91, 0.3); border-color: var(--accent); }
+.sp-table.sp-editable input[type="color"] {
+  width: 42px; height: 26px; padding: 2px; cursor: pointer;
+}
+
+/* ---------- 识别提示词文本框 ---------- */
+.sp-prompt textarea {
+  width: 100%;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--ink);
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: #fff;
+  resize: vertical;
+}
+.sp-prompt textarea:focus {
+  outline: 2px solid rgba(255, 138, 91, 0.3);
+  border-color: var(--accent);
+}
+
+/* ---------- 大模型调用日志 ---------- */
+.badge {
+  display: inline-block; padding: 1px 8px; border-radius: 999px;
+  font-size: 12px; font-weight: 600; line-height: 1.6;
+}
+.badge.ok { background: #e6f4ea; color: #1e7e34; }
+.badge.err { background: #fdecea; color: #c0392b; }
+.http { color: var(--muted); font-size: 12px; }
+.log-detail {
+  max-width: 360px;
+  font-size: 12px;
+  color: var(--muted);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.log-detail:hover { white-space: normal; overflow: visible; }
