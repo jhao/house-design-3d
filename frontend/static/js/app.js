@@ -203,7 +203,8 @@ async function createBlank() {
 
 function applyScene(scene) {
   state.scene = scene;
-  editor2d.setScene(scene);
+  if (state.project) editor2d.setProjectId(state.project.id);  // 恢复该项目本地保存的视图（缩放/平移）
+  editor2d.setScene(scene, true);   // keepView：刷新页面 / 识别房间后保持当前缩放比例
   for (const f of scene.furniture || []) if (f.type === "image" && f.imageUrl) editor2d.preloadImage(f.imageUrl);
   renderProps(null);
   renderAreas();

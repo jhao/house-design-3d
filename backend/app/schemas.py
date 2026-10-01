@@ -24,6 +24,15 @@ class AiArrangeRequest(BaseModel):
     message: str
 
 
+class ApplyActionsRequest(BaseModel):
+    """标准动作 API 请求：一组画布动作（详见 backend/app/actions.py）。
+
+    每个动作形如 {"op": "add_furniture", "type": "sofa", "x": 3000, "y": 2000}。
+    """
+    actions: list
+    message: Optional[str] = None
+
+
 class ImportResponse(BaseModel):
     id: int
     name: str

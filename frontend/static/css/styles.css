@@ -316,7 +316,9 @@ html, body {
 .props .del { margin-top: 8px; background: #fff0f0; border-color: #f0b4b4; color: #b30000; width: 100%; }
 
 /* ============ 面积 ============ */
-.areas { font-size: 12px; }
+.areas { font-size: 12px; max-height: 264px; overflow-y: auto; scrollbar-width: thin; }
+.areas::-webkit-scrollbar { width: 8px; }
+.areas::-webkit-scrollbar-thumb { background: #ddd6c8; border-radius: 8px; }
 .areas .total { font-weight: 800; font-size: 14px; margin-bottom: 6px; }
 .areas .r { display: flex; justify-content: space-between; padding: 3px 0; border-bottom: 1px dashed var(--line); }
 .areas .sw { display: inline-block; width: 11px; height: 11px; border-radius: 3px; margin-right: 6px; vertical-align: -1px; }

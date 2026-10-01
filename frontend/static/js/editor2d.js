@@ -22,6 +22,8 @@ class Editor2D {
     this.minimap = null; this.mctx = null; this._miniCss = { w: 200, h: 120 }; this._miniMap = null;
     this._miniDrag = false;
     this._undo = []; this._redo = []; this._lastNudge = 0;
+    this.projectId = null;   // 当前项目 id（用于按项目持久化视图）
+    this._viewInit = false;  // 当前项目是否已加载过视图（避免重复 reset）
 
     // 缩放标定：100% 时 1m 网格 = 50px（屏幕）
     this.PPM100 = 50;
@@ -41,7 +43,12 @@ class Editor2D {
     this.scene = scene || { walls: [], openings: [], rooms: [], furniture: [], characters: [] };
     this.selection = null; this.selectionSet = [];
     if (!this.cw || !this.ch) this.resize();
-    if (!keepView) this.resetZoom();
+    // 保持视图：刷新页面 / 识别房间后不丢失缩放比例（按项目 id 恢复本地存储的视图）
+    if (keepView) {
+      if (!this._viewInit) { this._viewInit = true; if (!this._loadView()) this.resetZoom(); }
+    } else {
+      if (!this._loadView()) this.resetZoom();
+    }
     this.render();
   }
 
@@ -83,7 +90,7 @@ class Editor2D {
     const p = this.pxPerMeter / this.PPM100 * 100 * factor;
     this.setZoomPercent(p, anchor || [this.cw / 2, this.ch / 2]);
   }
-  _notifyView() { if (this.opts.onViewChange) this.opts.onViewChange(this.view, this.zoomPercent); }
+  _notifyView() { this.saveView(); if (this.opts.onViewChange) this.opts.onViewChange(this.view, this.zoomPercent); }
 
   // 默认视图：100%（1m = 50px），对准场景中心
   resetZoom() {
@@ -105,6 +112,35 @@ class Editor2D {
     let zoom = Math.min(this.cw / (wDisp * pad || 1), this.ch / (hDisp * pad || 1));
     if (!isFinite(zoom) || zoom <= 0) zoom = this._zoomFromPercent(100);
     this.view.zoom = this._clampZoom(zoom);
+    this._notifyView();   // 适应窗口的结果也持久化
+  }
+
+  // ---- 视图持久化（按项目 id 存入 localStorage）----
+  setProjectId(pid) {
+    this.projectId = pid || null;
+    this._viewInit = false;     // 下一个 setScene 会按新项目恢复视图
+    this._loadView();
+  }
+  _viewKey() { return "houseview:" + (this.projectId || "default"); }
+  saveView() {
+    try {
+      localStorage.setItem(this._viewKey(), JSON.stringify({
+        zoom: this.view.zoom, panX: this.view.panX, panY: this.view.panY,
+        angle: this.view.angle, cx: this.center.x, cy: this.center.y,
+      }));
+    } catch (e) { /* localStorage 不可用时静默忽略 */ }
+  }
+  _loadView() {
+    try {
+      const s = localStorage.getItem(this._viewKey());
+      if (!s) return false;
+      const v = JSON.parse(s);
+      this.view.zoom = v.zoom; this.view.panX = v.panX; this.view.panY = v.panY;
+      this.view.angle = v.angle || 0;
+      if (v.cx !== undefined && v.cy !== undefined) this.center = { x: v.cx, y: v.cy };
+      this.render(); this._notifyView();
+      return true;
+    } catch (e) { return false; }
   }
 
   _bounds() {
@@ -724,6 +760,7 @@ class Editor2D {
       items.push({ sel: s, el: o, wall });
     }
     this._drag = { type: "openings", startW: w0World, items, historyPushed: false };
+    this.canvas.style.cursor = "grabbing";    // 沿墙拖拽门窗：小手光标
   }
 
   // ---- Alt 拖拽：围绕元素中心旋转 ----
@@ -740,6 +777,7 @@ class Editor2D {
       return null;
     }).filter(Boolean);
     this._drag = { type: "rotate", startW: w0World, items, historyPushed: false };
+    this.canvas.style.cursor = "grabbing";
   }
 
   // ---- 图片缓存 ----
@@ -772,6 +810,12 @@ class Editor2D {
     const [sx, sy] = this._pos(e);
     const w = this.screenToWorld(sx, sy);
 
+    // 未选中任何元素时，Alt/Option + 左键 = 右键效果（平移画布）
+    if (e.altKey && !this.selection && !this.drawMode) {
+      this._panning = true; this._panStart = [sx, sy, this.view.panX, this.view.panY];
+      this.canvas.style.cursor = "grabbing"; return;
+    }
+
     if (this.drawMode) {
       if (!this._drawStart) {
         const v = this._nearestVertex(w.x, w.y, null);
@@ -787,7 +831,9 @@ class Editor2D {
     if (hit) {
       if (hit.type === "vertex") {
         this._drag = { type: "vertex", vx: hit.x, vy: hit.y, affected: hit.walls, moving: true, historyPushed: false };
-        const w0 = hit.walls[0].wall; this.setSelection({ type: "wall", id: w0.id }); this.render(); return;
+        const w0 = hit.walls[0].wall; this.setSelection({ type: "wall", id: w0.id });
+        this.canvas.style.cursor = "grabbing";   // 调整墙端点（长度）：小手光标
+        this.render(); return;
       }
       const inSet = this.selectionSet.some(s => s.type === hit.type && s.id === hit.id);
       const mod = e.ctrlKey || e.metaKey;
@@ -829,6 +875,7 @@ class Editor2D {
       return null;
     }).filter(Boolean);
     this._drag = { type: "multi", startW: w0World, items };
+    this.canvas.style.cursor = "crosshair";   // 移动元素：十字光标
   }
 
   _onMove(e) {
@@ -890,6 +937,15 @@ class Editor2D {
       this.render(); this._notifyView(); return;
     }
     if (this._miniDrag) { this._miniMove(e); return; }
+    // 悬停光标反馈：可移动元素 → 十字；墙端点（可改长度）→ 小手
+    if (!this.drawMode && !this._drag && !this._panning && !this._marquee && !this._miniDrag) {
+      const [hx, hy] = this._pos(e);
+      const wp = this.screenToWorld(hx, hy);
+      const hit = this.hitTest(wp.x, wp.y);
+      if (hit && hit.type === "vertex") this.canvas.style.cursor = "grab";
+      else if (hit) this.canvas.style.cursor = "crosshair";
+      else this.canvas.style.cursor = "default";
+    }
     if (this.drawMode) return;
     // 顶点拖拽
     if (this._drag && this._drag.type === "vertex") {
@@ -925,13 +981,14 @@ class Editor2D {
       }
       this._marquee = null; this.render(); return;
     }
-    if (this._drag) { const wasEdit = this._drag.type === "vertex" || this._drag.type === "rotate"; this._drag = null; if (wasEdit) this.opts.onSceneChange && this.opts.onSceneChange(); return; }
+    if (this._drag) { const wasEdit = this._drag.type === "vertex" || this._drag.type === "rotate"; this._drag = null; this.canvas.style.cursor = this.drawMode ? "crosshair" : "default"; if (wasEdit) this.opts.onSceneChange && this.opts.onSceneChange(); return; }
     if (this._panning) { this._panning = false; this.canvas.style.cursor = "default"; }
   }
 
   _elementInMarquee(sel, rect) {
     const b = this._screenBounds(sel); if (!b) return false;
-    return !(b.maxx < rect.x0 || b.minx > rect.x1 || b.maxy < rect.y0 || b.miny > rect.y1);
+    // 必须完全落在选框内（只框中一部分的元素不选中）
+    return b.minx >= rect.x0 && b.maxx <= rect.x1 && b.miny >= rect.y0 && b.maxy <= rect.y1;
   }
 
   _screenBounds(sel) {

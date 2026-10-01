@@ -42,6 +42,14 @@
 ### 6. 项目管理
 - 支持多项目；项目内可设置比例、缩放、区域，支持复制、重命名。
 
+### 7. 编辑交互增强
+- **复制 / 粘贴置顶**：`⌘/Ctrl + C / X / V` 复制粘贴，新元素置于同层最上方，粘贴后自动选中、可直接拖拽。
+- **完全包含式框选**：框选时只有「完全落在选框内」的元素才会被选中，部分重叠不选中。
+- **光标语义**：移动元素时显示十字光标（`crosshair`）；拖拽墙端点改长度、沿墙拖拽门窗时显示小手光标（`grab`/`grabbing`）。
+- **Alt 平移**：未选中任何元素时，按住 `Alt/Option` 再左键拖拽 = 右键效果（平移画布）。
+- **缩放持久化**：缩放 / 平移比例按项目 id 存入 `localStorage`，刷新页面或点「识别房间」后仍保持，不会复位。
+- **面积统计滚动**：右侧面积统计超过 10 个房间时显示区域内滚动条，不再无限伸长。
+
 ---
 
 ## 二、技术架构选型
@@ -152,3 +160,32 @@ uvicorn backend.app.main:app --host 0.0.0.0 --port 8000
 
 ## 五、License
 本项目仅供学习与自用。如需商用或二次分发，请自行确认相关许可。
+
+---
+
+## 六、标准动作 API（供 AI / MCP 调用）
+
+所有「对画布的修改」都收敛为一组结构化**动作（action）**，由后端统一执行。前端交互、AI 助手、以及未来的 MCP 工具走的是同一套语义接口，行为一致、可审计、可重放。
+
+- 执行器：`backend/app/actions.py` → `apply_actions(scene, actions)` 返回 `(新场景, 报告)`。
+- REST 接口：`POST /api/projects/{pid}/apply_actions`，请求体 `{ "actions": [...], "message": "可选备注" }`。
+- 自然语言入口：`POST /api/projects/{pid}/ai_arrange`，由大模型把一句话翻译成动作后执行（未配置 LLM 时回落内置启发式）。
+
+动作示例（`op` 取值）：
+
+| op | 说明 | 关键参数 |
+| --- | --- | --- |
+| `add_furniture` | 新增家具 | `type, x, y, 可选 width/depth/rotation/color/label` |
+| `update_furniture` | 修改家具 | `id, x?, y?, width?, depth?, rotation?, color?, label?` |
+| `add_character` | 新增人物 | `x, y, 可选 height/rotation/state/color` |
+| `update_character` | 修改人物 | `id, x?, y?, height?, rotation?, state?, color?` |
+| `move_element` | 平移元素 | `type, id, dx?, dy?, x?, y?`（`type` ∈ furniture/character/wall/room/opening） |
+| `add_wall` | 新增墙 | `x1, y1, x2, y2, 可选 kind/thickness/height` |
+| `update_wall` | 修改墙 | `id, x1?, y1?, x2?, y2?, kind?, thickness?, height?` |
+| `add_opening` | 新增门窗 | `wall_id, opening_type, 可选 offset/width/height/dir` |
+| `update_opening` | 修改门窗 | `id, wall_id?, offset?, width?, height?, dir?` |
+| `delete_element` | 删除元素 | `type, id`（`type` ∈ wall/opening/furniture/character/room） |
+
+坐标单位：**mm（世界坐标）**。门窗 `offset` 为沿所属墙起点起算的弧长，执行时会自动夹紧在墙段内；删除墙会连带删除其上的门窗。
+
+> MCP 接入思路：MCP 工具只需把「用户意图」转换为上述 action 数组，再调用 `apply_actions` 接口即可，无需关心前端渲染细节。

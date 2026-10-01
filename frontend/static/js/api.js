@@ -54,6 +54,13 @@ const API = {
       body: JSON.stringify({ message }),
     });
   },
+  // 标准动作 API：直接执行一组画布动作（AI / MCP / 自动化调用）
+  async applyActions(id, actions, message) {
+    return this._json(`/api/projects/${id}/apply_actions`, {
+      method: "POST",
+      body: JSON.stringify({ actions, message: message || null }),
+    });
+  },
   async getSettings() {
     return this._json("/api/settings");
   },
