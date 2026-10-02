@@ -17,6 +17,9 @@ class Editor3D {
     this.container = container;
     this.ready = false;
     this._raf = null;
+    this._altDown = false;       // Alt/Option 是否按下（3D 中左键=右键平移）
+    this._savePending = false;   // 相机视角保存节流标记
+    this.projectId = null;       // 当前项目 id（按项目持久化相机视角）
     if (typeof THREE === "undefined") {
       container.innerHTML = '<div style="padding:20px;color:#a55">3D 视图需要联网加载 Three.js（CDN）。请联网后刷新。</div>';
       return;
@@ -44,6 +47,12 @@ class Editor3D {
     this.controls = new THREE.OrbitControls(this.camera, this.renderer.domElement);
     this.controls.enableDamping = true;
     this.controls.dampingFactor = 0.08;
+    this.controls.mouseButtons = { LEFT: THREE.MOUSE.ROTATE, MIDDLE: THREE.MOUSE.DOLLY, RIGHT: THREE.MOUSE.PAN };
+    // 相机视角变化即按项目保存（节流 300ms）
+    this.controls.addEventListener("change", () => this._onCamChange());
+    // Alt/Option 按住时左键等同右键（平移），松开恢复旋转；仅 3D 视图激活时生效
+    window.addEventListener("keydown", (e) => { if (e.key === "Alt") { this._altDown = true; this._applyAlt(); } });
+    window.addEventListener("keyup",   (e) => { if (e.key === "Alt") { this._altDown = false; this._applyAlt(); } });
 
     this.root = new THREE.Group();
     this.scene3.add(this.root);
@@ -78,6 +87,44 @@ class Editor3D {
     }
   }
 
+  // ---- 相机视角持久化（按项目 id 存入 localStorage）----
+  setProjectId(pid) {
+    this.projectId = pid || null;
+    const v = this._loadView();
+    if (v && this.ready) {
+      this.camera.position.set(v.pos.x, v.pos.y, v.pos.z);
+      this.controls.target.set(v.tgt.x, v.tgt.y, v.tgt.z);
+    }
+  }
+  _viewKey() { return "houseview3d:" + (this.projectId || "default"); }
+  saveView() {
+    if (!this.ready || !this.controls) return;
+    try {
+      localStorage.setItem(this._viewKey(), JSON.stringify({
+        pos: { x: this.camera.position.x, y: this.camera.position.y, z: this.camera.position.z },
+        tgt: { x: this.controls.target.x, y: this.controls.target.y, z: this.controls.target.z },
+      }));
+    } catch (e) { /* localStorage 不可用时忽略 */ }
+  }
+  _loadView() {
+    try {
+      const s = localStorage.getItem(this._viewKey());
+      if (!s) return null;
+      return JSON.parse(s);
+    } catch (e) { return null; }
+  }
+  _onCamChange() {
+    if (this._savePending) return;
+    this._savePending = true;
+    setTimeout(() => { this._savePending = false; this.saveView(); }, 300);
+  }
+  // Alt 按下时左键=平移；松开恢复旋转（仅 3D 视图可见时生效）
+  _applyAlt() {
+    if (!this.controls) return;
+    const active = this.container && !this.container.classList.contains("hidden");
+    this.controls.mouseButtons.LEFT = (this._altDown && active) ? THREE.MOUSE.PAN : THREE.MOUSE.ROTATE;
+  }
+
   _toon(hex) {
     return new THREE.MeshLambertMaterial({ color: new THREE.Color(hex) });
   }
@@ -85,8 +132,16 @@ class Editor3D {
   _wallBox(cx, cz, len, h, t, ang, yCenter, color, opacity) {
     const geo = new THREE.BoxGeometry(len, h, t);
     const mat = new THREE.MeshLambertMaterial({ color: new THREE.Color(color === undefined ? 0xc9a27e : color) });
-    if (opacity !== undefined && opacity < 1) { mat.transparent = true; mat.opacity = opacity; }
+    if (opacity !== undefined && opacity < 1) {
+      mat.transparent = true;
+      mat.opacity = opacity;
+      mat.depthWrite = false;       // 半透明墙不写深度，便于从外部看穿到室内
+      mat.side = THREE.DoubleSide;  // 双面渲染，墙体内外表面都可见
+    }
     const mesh = new THREE.Mesh(geo, mat);
+    if (opacity !== undefined && opacity < 1) {
+      mesh.renderOrder = 2;          // 透明墙/玻璃墙最后绘制，确保始终能看穿到室内家具
+    }
     this._outline(mesh, 1.02);
     mesh.position.set(cx, yCenter !== undefined ? yCenter : h / 2, cz);
     mesh.rotation.y = ang;
@@ -94,7 +149,7 @@ class Editor3D {
   }
 
   // 将一条墙按门窗位置切成多段：门整高留空、窗中段留空（上下保留墙）
-  _buildWall(w, DR, openings) {
+  _buildWall(w, DR, openings, transparent) {
     const kind = w.kind || "normal";
     const dx = w.x2 - w.x1, dy = w.y2 - w.y1;
     const L = Math.hypot(dx, dy) || 1;
@@ -129,7 +184,9 @@ class Editor3D {
     }
 
     const wallColor = kind === "bearing" ? 0x6b6b6b : kind === "glass" ? 0xbfe3ff : 0xc9a27e;
-    const wallOpacity = kind === "glass" ? 0.4 : 1.0;
+    // 透明模式（默认开启）：普通墙/承重墙半透明，便于从 3D 外部看穿到室内；
+    // 玻璃墙为「最透」的面（0.2），明显比普通半透明墙(0.34)更清楚，可从任一侧双向看穿
+    const wallOpacity = kind === "glass" ? 0.2 : (transparent ? 0.34 : 1.0);
 
     const os = (openings || []).filter(o => o.wall_id === w.id)
       .map(o => {
@@ -170,12 +227,23 @@ class Editor3D {
       if (o.type === "window") {
         const ow = (o.width || 900) / DR, wh = (o.height || 1500) / DR;
         const gy = SILL / DR + wh / 2;
-        const mesh = new THREE.Mesh(new THREE.BoxGeometry(ow, wh, Math.max(0.06, t * 1.15)),
-          new THREE.MeshLambertMaterial({ color: 0x9fd8e6, transparent: true, opacity: 0.5 }));
-        this._outline(mesh, 1.03);
-        mesh.position.set(px, gy, pz);
-        mesh.rotation.y = ang;
-        this.root.add(mesh);
+        const grp = new THREE.Group();
+        grp.position.set(px, gy, pz);
+        grp.rotation.y = ang;
+        // 透明玻璃（可透过窗看进室内，也可从室内看向室外）：双面 + 不写深度 + 最后绘制
+        const pane = new THREE.Mesh(new THREE.BoxGeometry(ow, wh, Math.max(0.05, t * 1.1)),
+          new THREE.MeshLambertMaterial({ color: 0xbfe8f2, transparent: true, opacity: 0.16, depthWrite: false, side: THREE.DoubleSide }));
+        pane.renderOrder = 2;          // 始终在实体家具之后绘制，确保双向都看穿
+        this._outline(pane, 1.04);
+        grp.add(pane);
+        // 窗框（四边细框，便于辨识窗户）
+        const fr = Math.max(0.08, t * 0.4), fmat = this._toon(0x6f7a86);
+        const addBar = (w, h, x, y) => { const b = new THREE.Mesh(new THREE.BoxGeometry(w, h, t * 1.3), fmat); b.position.set(x, y, 0); grp.add(b); };
+        addBar(ow, fr, 0, wh / 2 - fr / 2);
+        addBar(ow, fr, 0, -wh / 2 + fr / 2);
+        addBar(fr, wh, -ow / 2 + fr / 2, 0);
+        addBar(fr, wh, ow / 2 - fr / 2, 0);
+        this.root.add(grp);
       } else if (o.dir) {
         // 门：按开门方向（6 种）画真实门扇，仅渲染用户所选方向（无 dir 不画，杜绝"初始门"残留）
         const ow = (o.width || 900) / DR, oh = (o.height || 2100) / DR, thin = 0.05;
@@ -211,7 +279,10 @@ class Editor3D {
   build(scene, opts) {
     if (!this.ready) return;
     this._clear();
+    this._lastScene = scene; this._lastOpts = opts;   // 缓存最近一次场景，供 resetView 复用
     const realistic = !!(opts && opts.realistic);
+    // 3D 墙体透明：默认开启（false 时才实心），对应 2D 俯视可看穿室内的体验
+    const wallTransparent = !(opts && opts.wallTransparent === false);
     const DR = (scene && scene.display_ratio) || 200;
     const walls = scene.walls || [];
     const furn = scene.furniture || [];
@@ -228,7 +299,7 @@ class Editor3D {
     this.root.add(floor);
 
     // 墙体（按门窗开洞 + 类型）
-    for (const w of walls) this._buildWall(w, DR, scene.openings || []);
+    for (const w of walls) this._buildWall(w, DR, scene.openings || [], wallTransparent);
 
     // 家具
     for (const f of furn) {
@@ -257,9 +328,27 @@ class Editor3D {
     // 人物（测试设计合理性）
     for (const c of (scene.characters || [])) this._buildCharacter(c, DR);
 
-    // 相机对准中心
-    this.controls.target.set((minx+maxx)/2/DR, 2, (miny+maxy)/2/DR);
+    // 相机：优先恢复该项目本地保存的视角（切换 2D/3D 或刷新后保持水平面位置与缩放）
+    const saved = this._loadView();
+    if (saved) {
+      this.camera.position.set(saved.pos.x, saved.pos.y, saved.pos.z);
+      this.controls.target.set(saved.tgt.x, saved.tgt.y, saved.tgt.z);
+    } else {
+      const cx = (minx + maxx) / 2 / DR, cz = (miny + maxy) / 2 / DR;
+      const span = Math.max((maxx - minx) / DR, (maxy - miny) / DR, 6);
+      // 默认相机：等比拉近（距=场景跨度×0.85），高度更低，避免 2D→3D 一上来离得太远
+      const dist = span * 0.85 + 4;
+      this.camera.position.set(cx + dist * 0.62, dist * 0.55, cz + dist * 0.62);
+      this.controls.target.set(cx, 1.2, cz);
+    }
     this.controls.update();
+  }
+
+  // 复位视角：清除该项目本地保存的（可能过远的）视角，按默认近距离重新取景
+  resetView() {
+    if (!this.ready) return;
+    try { localStorage.removeItem(this._viewKey()); } catch (e) {}
+    if (this._lastScene) this.build(this._lastScene, this._lastOpts);
   }
 
   // 胶囊体：圆柱 + 两端球（three r137 无 CapsuleGeometry）
@@ -335,10 +424,49 @@ class Editor3D {
     head.position.y = torsoH + 0.06 * H + headR;
     torso.add(head);
 
-    const hair = new THREE.Mesh(new THREE.SphereGeometry(headR * 1.04, 20, 16, 0, Math.PI * 2, 0, Math.PI * 0.56), hairM);
-    hair.scale.set(1, 1.06, 0.99);
-    hair.position.copy(head.position); hair.position.y += headR * 0.06;
-    torso.add(hair);
+    // 五官（眉·眼·鼻·口·耳）+ 微笑表情
+    const face = new THREE.Group();
+    head.add(face);
+    const fDark = this._toon(0x2b2b2b);
+    for (const sx of [-1, 1]) {                       // 眼睛
+      const eye = new THREE.Mesh(new THREE.SphereGeometry(0.13 * headR, 12, 10), fDark);
+      eye.position.set(sx * 0.34 * headR, 0.12 * headR, 0.86 * headR);
+      face.add(eye);
+    }
+    for (const sx of [-1, 1]) {                       // 眉毛
+      const brow = new THREE.Mesh(new THREE.BoxGeometry(0.26 * headR, 0.05 * headR, 0.06 * headR), this._toon(0x4a3326));
+      brow.position.set(sx * 0.34 * headR, 0.34 * headR, 0.85 * headR);
+      face.add(brow);
+    }
+    const nose = new THREE.Mesh(new THREE.SphereGeometry(0.09 * headR, 10, 8), skin);   // 鼻子
+    nose.position.set(0, -0.04 * headR, 0.97 * headR);
+    face.add(nose);
+    for (const sx of [-1, 1]) {                       // 耳朵
+      const ear = new THREE.Mesh(new THREE.SphereGeometry(0.13 * headR, 10, 8), skin);
+      ear.position.set(sx * headR, 0, 0);
+      face.add(ear);
+    }
+    const mouth = new THREE.Mesh(                      // 嘴巴：微笑（下半圆环 ∪）
+      new THREE.TorusGeometry(0.24 * headR, 0.04 * headR, 8, 18, Math.PI),
+      this._toon(0x9c4a36));
+    mouth.rotation.x = Math.PI;
+    mouth.position.set(0, -0.4 * headR, 0.82 * headR);
+    face.add(mouth);
+
+    // 头发（按长度：短 / 中 / 长）
+    const hairLen = c.hair || "medium";
+    const cap = new THREE.Mesh(new THREE.SphereGeometry(headR * 1.05, 20, 16, 0, Math.PI * 2, 0, Math.PI * 0.62), hairM);
+    cap.scale.set(1.04, 1.08, 1.0);
+    cap.position.copy(head.position); cap.position.y += headR * 0.06;
+    torso.add(cap);
+    const sideLen = hairLen === "long" ? 2.0 * headR : hairLen === "medium" ? 1.0 * headR : 0.3 * headR;
+    const hy = head.position.y - sideLen / 2 + headR * 0.15;
+    const back = new THREE.Mesh(new THREE.BoxGeometry(1.7 * headR, sideLen, 0.55 * headR), hairM);
+    back.position.set(0, hy, -0.5 * headR); torso.add(back);
+    for (const sx of [-1, 1]) {
+      const side = new THREE.Mesh(new THREE.BoxGeometry(0.5 * headR, sideLen, 1.3 * headR), hairM);
+      side.position.set(sx * 0.82 * headR, hy, -0.05 * headR); torso.add(side);
+    }
 
     const makeArm = (side) => {
       const arm = new THREE.Group();
@@ -397,10 +525,12 @@ class Editor3D {
   }
 
   // 真实家具模型
+  // 注意：显示单位 1 = 200mm = 0.2m，故"米 -> 单位"需 ×5（u()）
   _realisticFurniture(f, DR) {
     const fw = (f.width||800)/DR, fd = (f.depth||800)/DR;
-    const H = furnHeight(f.type, 800) / DR;
+    const H = furnHeight(f.type, 800) / DR;       // 家具总高（已是正确的显示单位）
     const col = f.color || "#8E7CC3";
+    const u = (m) => m * 5;                         // 米 -> 显示单位（1 单位 = 0.2m）
     const grp = new THREE.Group();
     grp.position.set(f.x/DR, 0, f.y/DR);
     grp.rotation.y = -(f.rotation||0) * Math.PI/180;
@@ -410,31 +540,30 @@ class Editor3D {
     };
     switch (f.type) {
       case "bed": {
-        const baseH = 0.3, matH = 0.25;
-        add(fw, baseH, fd, col, 0, baseH/2, 0);
-        add(fw*0.94, matH, fd*0.82, "#f5f0e6", 0, baseH+matH/2, -fd*0.05);
-        add(fw*0.32, 0.12, fd*0.24, "#ffffff", -fw*0.26, baseH+matH+0.06, -fd*0.28);
-        add(fw*0.32, 0.12, fd*0.24, "#ffffff",  fw*0.26, baseH+matH+0.06, -fd*0.28);
+        add(fw, u(0.25), fd, col, 0, u(0.125), 0);                          // 床架
+        add(fw*0.94, u(0.22), fd*0.82, "#f5f0e6", 0, u(0.36), -fd*0.05);    // 床垫
+        add(fw*0.32, u(0.12), fd*0.24, "#ffffff", -fw*0.26, u(0.56), -fd*0.28); // 枕头
+        add(fw*0.32, u(0.12), fd*0.24, "#ffffff",  fw*0.26, u(0.56), -fd*0.28);
         break;
       }
       case "sofa": {
-        add(fw, 0.35, fd, col, 0, 0.175, 0);
-        add(fw, 0.5, fd*0.22, col, 0, 0.5, -fd*0.39);
-        add(fw*0.12, 0.42, fd*0.55, col, -fw*0.44, 0.42, 0);
-        add(fw*0.12, 0.42, fd*0.55, col,  fw*0.44, 0.42, 0);
+        add(fw, u(0.42), fd, col, 0, u(0.21), 0);                          // 座基
+        add(fw, u(0.45), fd*0.22, col, 0, u(0.42)+u(0.225), -fd*0.39);     // 靠背
+        add(fw*0.12, u(0.6), fd*0.55, col, -fw*0.44, u(0.3), 0);           // 扶手
+        add(fw*0.12, u(0.6), fd*0.55, col,  fw*0.44, u(0.3), 0);
         break;
       }
       case "table": {
-        const topH = 0.75, topT = 0.06, legW = 0.1;
+        const topH = u(0.75), topT = u(0.06), legW = u(0.08);
         add(fw, topT, fd, "#caa472", 0, topH, 0);
         for (const [sx, sz] of [[-1,-1],[1,-1],[-1,1],[1,1]])
           add(legW, topH-topT, legW, "#7a5a3a", sx*(fw/2-legW), (topH-topT)/2, sz*(fd/2-legW));
         break;
       }
       case "chair": {
-        const sh = 0.45, st = 0.06, legW = 0.08;
+        const sh = u(0.45), st = u(0.06), legW = u(0.06);
         add(fw, st, fd, col, 0, sh, 0);
-        add(fw, 0.4, fd*0.2, col, 0, sh+0.2, -fd*0.4);
+        add(fw, u(0.45), fd*0.2, col, 0, sh+u(0.225), -fd*0.4);
         for (const [sx, sz] of [[-1,-1],[1,-1],[-1,1],[1,1]])
           add(legW, sh-st, legW, "#7a5a3a", sx*(fw/2-legW), (sh-st)/2, sz*(fd/2-legW));
         break;
@@ -461,24 +590,24 @@ class Editor3D {
         break;
       }
       case "plant": {
-        add(0.4, 0.4, 0.4, "#a0623a", 0, 0.2, 0);
+        add(u(0.4), u(0.4), u(0.4), "#a0623a", 0, u(0.2), 0);
         const foliage = new THREE.Mesh(new THREE.SphereGeometry(Math.min(fw,fd)/2, 12, 12), this._toon("#2E7D32"));
         this._outline(foliage, 1.04); foliage.position.set(0, H*0.7, 0); grp.add(foliage);
         break;
       }
       case "toilet": {
-        add(fw*0.7, 0.4, fd*0.4, col, 0, 0.2, fd*0.28); // 水箱
-        const bowl = new THREE.Mesh(new THREE.BoxGeometry(fw, 0.45, fd*0.7), this._toon(col));
-        this._outline(bowl, 1.04); bowl.position.set(0, 0.225, -fd*0.15); grp.add(bowl);
+        add(fw*0.7, u(0.6), fd*0.4, col, 0, u(0.3), fd*0.28);   // 水箱
+        const bowl = new THREE.Mesh(new THREE.BoxGeometry(fw, u(0.4), fd*0.7), this._toon(col));
+        this._outline(bowl, 1.04); bowl.position.set(0, u(0.2), -fd*0.15); grp.add(bowl);
         break;
       }
       case "stove": {
         add(fw, H, fd, col, 0, H/2, 0); // 柜体
-        const top = new THREE.Mesh(new THREE.BoxGeometry(fw*0.96, 0.06, fd*0.96), this._toon("#222222"));
-        this._outline(top, 1.02); top.position.set(0, H - 0.03, 0); grp.add(top);
+        const top = new THREE.Mesh(new THREE.BoxGeometry(fw*0.96, u(0.06), fd*0.96), this._toon("#222222"));
+        this._outline(top, 1.02); top.position.set(0, H - u(0.03), 0); grp.add(top);
         const burner = (bx, bz) => {
-          const r = new THREE.Mesh(new THREE.CylinderGeometry(0.12, 0.12, 0.04, 16), this._toon("#444444"));
-          r.position.set(bx, H + 0.005, bz); grp.add(r);
+          const r = new THREE.Mesh(new THREE.CylinderGeometry(u(0.12), u(0.12), u(0.04), 16), this._toon("#444444"));
+          r.position.set(bx, H + u(0.005), bz); grp.add(r);
         };
         burner(-fw*0.22, -fd*0.2); burner(fw*0.22, -fd*0.2);
         burner(-fw*0.22, fd*0.2); burner(fw*0.22, fd*0.2);
@@ -486,10 +615,10 @@ class Editor3D {
       }
       case "sink": {
         add(fw, H, fd, col, 0, H/2, 0);
-        const basin = new THREE.Mesh(new THREE.BoxGeometry(fw*0.8, 0.06, fd*0.7), this._toon("#cfd6da"));
-        this._outline(basin, 1.02); basin.position.set(0, H - 0.03, 0); grp.add(basin);
-        add(0.06, 0.35, 0.06, "#9aa0a4", fw*0.3, H + 0.15, -fd*0.1); // 水龙头立管
-        add(0.28, 0.06, 0.06, "#9aa0a4", fw*0.18, H + 0.32, -fd*0.1); // 出水臂
+        const basin = new THREE.Mesh(new THREE.BoxGeometry(fw*0.8, u(0.06), fd*0.7), this._toon("#cfd6da"));
+        this._outline(basin, 1.02); basin.position.set(0, H - u(0.03), 0); grp.add(basin);
+        add(u(0.06), u(0.35), u(0.06), "#9aa0a4", fw*0.3, H + u(0.15), -fd*0.1); // 水龙头立管
+        add(u(0.28), u(0.06), u(0.06), "#9aa0a4", fw*0.18, H + u(0.32), -fd*0.1); // 出水臂
         break;
       }
       default: {

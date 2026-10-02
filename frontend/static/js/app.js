@@ -39,9 +39,20 @@ const DOOR_DIRS = [
 // 人物状态
 const CHAR_STATES = [["stand","站立"],["raise","举手"],["squat","蹲下"],["sit","坐下"],["lie","躺下"]];
 
-const state = { project: null, scene: null, mode: "2d", realistic: false };
+const state = { project: null, scene: null, mode: "2d", realistic: false, wallTransparent: true };
 let editor2d, editor3d;
 let saveTimer = null;
+
+// ---------- 项目独立 URL：#/p/<id>，刷新/前进后退停留在同一项目 ----------
+function getProjectIdFromHash() {
+  const m = /^#\/p\/([^/]+)$/.exec(location.hash || "");
+  return m ? decodeURIComponent(m[1]) : null;
+}
+function syncHash() {
+  if (!state.project) return;
+  const want = "#/p/" + encodeURIComponent(state.project.id);
+  if (location.hash !== want) location.hash = want;   // 由 hashchange 的 guard 避免重复加载
+}
 
 function $(id) { return document.getElementById(id); }
 
@@ -62,9 +73,16 @@ window.addEventListener("DOMContentLoaded", async () => {
   await loadRuntimeSettings();
   window.addEventListener("resize", () => { if (!editor2d) return; editor2d.resize(); updateZoomWidget(); });
   const list = await loadProjects();
-  if (state.project) await selectProject(state.project.id);
-  else if (list.length) await selectProject(list[0].id);
+  const hashId = getProjectIdFromHash();
+  const target = (hashId && list.some(p => p.id === hashId)) ? hashId
+               : (list.length ? list[0].id : null);
+  if (target) await selectProject(target);
   else await createBlank();
+  // 监听地址栏 #/p/<id> 变化（浏览器前进/后退 或 手动修改地址）
+  window.addEventListener("hashchange", () => {
+    const id = getProjectIdFromHash();
+    if (id && (!state.project || state.project.id !== id)) selectProject(id);
+  });
   updateScaleWidget();
   updateZoomWidget();
   const h = $("hint");
@@ -189,6 +207,7 @@ async function selectProject(id) {
   applyScene(p.scene);
   markActive(id);
   updateScaleWidget();
+  syncHash();
 }
 
 async function createBlank() {
@@ -199,6 +218,7 @@ async function createBlank() {
   await loadProjects();
   markActive(p.id);
   updateScaleWidget();
+  syncHash();
 }
 
 function applyScene(scene) {
@@ -208,7 +228,7 @@ function applyScene(scene) {
   for (const f of scene.furniture || []) if (f.type === "image" && f.imageUrl) editor2d.preloadImage(f.imageUrl);
   renderProps(null);
   renderAreas();
-  if (state.mode === "3d" && editor3d) editor3d.build(scene, { realistic: state.realistic });
+  if (state.mode === "3d" && editor3d) build3d();
   updateZoomWidget();
 }
 
@@ -259,7 +279,7 @@ function bindNum(box, apply) {
     };
   });
 }
-function afterEdit() { renderAreas(); scheduleSave(); editor2d.render(); if (state.mode==="3d"&&editor3d) editor3d.build(state.scene, { realistic: state.realistic }); }
+function afterEdit() { renderAreas(); scheduleSave(); editor2d.render(); if (state.mode==="3d"&&editor3d) build3d(); }
 
 function renderWallProps(w, box) {
   const kindOpts = WALL_KINDS.map(([v, l]) => `<option value="${v}" ${v===(w.kind||"normal")?"selected":""}>${l}</option>`).join("");
@@ -325,10 +345,12 @@ function renderCharacterProps(c, box) {
     numInput("X", c.x) + numInput("Y", c.y) +
     numInput("身高", c.height, { step: 0.05 }) +
     numInput("旋转°", c.rotation, { div: 1, unit: "°" }) +
-    `<label>颜色<input type="color" value="${c.color||"#3a7bd5"}" id="cC"></label>` +
+    `<label>衣服颜色<input type="color" value="${c.color||"#3a7bd5"}" id="cC"></label>` +
+    `<label>发型<select id="cH">${["short","medium","long"].map(v=>`<option value="${v}" ${v===(c.hair||"medium")?"selected":""}>${v==="short"?"短发":v==="medium"?"中发":"长发"}</option>`).join("")}</select></label>` +
     `<button class="del" id="delBtn">删除人物</button>`;
   $("cS").onchange = () => { c.state = $("cS").value; afterEdit(); };
-  $("cC").onchange = () => { c.color = $("cC").value; afterEdit(); };
+  $("cC").oninput = () => { c.color = $("cC").value; afterEdit(); };   // 实时预览（重建已由 build3d 合并节流）
+  $("cH").onchange = () => { c.hair = $("cH").value; afterEdit(); };
   bindNum(box, (k, v) => { const map={"X":"x","Y":"y","身高":"height","旋转°":"rotation"}; c[map[k]]=v; });
   $("delBtn").onclick = () => { beginEdit(); state.scene.characters = state.scene.characters.filter(x=>x.id!==c.id); editor2d.setSelection(null); afterEdit(); };
 }
@@ -397,7 +419,7 @@ function addCharacter() {
   beginEdit();
   const b = editor2d._bounds();
   const cx = b ? (b.minx + b.maxx)/2 : 2000, cy = b ? (b.miny + b.maxy)/2 : 2000;
-  const item = { id: `c${Date.now()}`, x: Math.round(cx), y: Math.round(cy), height: 1700, state: "stand", rotation: 0, color: "#3a7bd5", label: "人" };
+  const item = { id: `c${Date.now()}`, x: Math.round(cx), y: Math.round(cy), height: 1700, state: "stand", rotation: 0, color: "#3a7bd5", hair: "medium", label: "人" };
   state.scene.characters = state.scene.characters || [];
   state.scene.characters.push(item);
   editor2d.setScene(state.scene, true);
@@ -604,7 +626,17 @@ function bindUI() {
   $("btnRender").onclick = () => {
     state.realistic = !state.realistic;
     $("btnRender").classList.toggle("active", state.realistic);
-    if (state.mode === "3d" && editor3d) editor3d.build(state.scene, { realistic: state.realistic });
+    if (state.mode === "3d" && editor3d) build3d();
+  };
+  // 透明墙：3D 视图中墙体半透明，便于看穿到室内
+  $("btnWallTrans").onclick = () => {
+    state.wallTransparent = !state.wallTransparent;
+    $("btnWallTrans").classList.toggle("active", state.wallTransparent);
+    if (state.mode === "3d" && editor3d) build3d();
+  };
+  $("btnReset3d").onclick = () => {            // 复位 3D 视角（清掉保存的过远视角，重新近距离取景）
+    if (editor3d) editor3d.resetView();
+    toast("3D 视角已复位");
   };
   $("btnAddChar").onclick = () => addCharacter();
   $("imgInput").onchange = async (e) => {
@@ -681,6 +713,19 @@ function doFit() {
   editor2d.render();
   updateZoomWidget();
   toast(`已适应窗口 · ${editor2d.zoomPercent}%`);
+}
+
+// 3D 重建（统一入口）：带上项目 id，便于按项目持久化相机视角
+// 用 rAF 节流：改色/拖拽等连续触发时合并为「每帧最多一次」重建，避免主线程被整场景重建打满（表现为卡死）
+let _build3dRaf = 0;
+function build3d() {
+  if (_build3dRaf) return;
+  _build3dRaf = requestAnimationFrame(() => {
+    _build3dRaf = 0;
+    if (!editor3d || !editor3d.ready || !state.scene) return;
+    editor3d.setProjectId(state.project ? state.project.id : null);
+    editor3d.build(state.scene, { realistic: state.realistic, wallTransparent: state.wallTransparent });
+  });
 }
 
 function bindZoombar() {
@@ -892,9 +937,13 @@ function switchMode(mode) {
   $("btn3d").classList.toggle("active", mode === "3d");
   $("canvas2d").classList.toggle("hidden", mode === "3d");
   $("canvas3d").classList.toggle("hidden", mode === "2d");
+  const h = $("hint");
+  if (h) h.textContent = mode === "3d"
+    ? "3D：左键旋转视角 · 按住 Alt/Option + 左键平移（等同右键）· 滚轮缩放"
+    : "左键点选/框选 · 右键平移 · 滚轮缩放 · 未选中时 Alt+左键=平移 · Alt 拖拽旋转 · ⌘C/⌘V 复制粘贴 · Del 删除";
   if (mode === "3d") {
     if (!editor3d) editor3d = new Editor3D($("canvas3d"));
-    if (editor3d.ready) { editor3d._resize(); editor3d.build(state.scene, { realistic: state.realistic }); }
+    if (editor3d.ready) { editor3d._resize(); build3d(); }
   } else {
     editor2d.resize();
     updateZoomWidget();
